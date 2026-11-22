@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from './modules/auth/auth.module.js';
+import { OrganizationsModule } from './modules/organizations/organizations.module.js';
 
 @Module({
   imports: [
@@ -13,7 +14,7 @@ import { AuthModule } from './modules/auth/auth.module.js';
 
     // 2. Conexión dinámica a PostgreSQL usando variables de entorno
     TypeOrmModule.forRootAsync({
-      imports: [ConfigModule],
+      imports: [ConfigModule, OrganizationsModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         type: 'postgres',
