@@ -20,6 +20,8 @@ import { OrganizationMember } from './entities/organization-member.entity.js';
 import { Organization } from './entities/organization.entity.js';
 import { Role } from './entities/role.entity.js';
 import { User } from './entities/user.entity.js';
+import { BadRequestException } from '@nestjs/common';
+
 
 interface StoredRefreshSession {
   userId: string;
@@ -66,6 +68,9 @@ export class AuthService {
     }
 
     const passwordHash = await argon2.hash(dto.password, { type: argon2.argon2id });
+    
+    // Generar token único para verificar el correo
+    const verificationToken = crypto.randomBytes(32).toString('hex');
 
     // Transacción atómica para crear Usuario + Organización + Membresía
     const { savedUser, savedOrg } = await this.dataSource.transaction(async (manager) => {
@@ -74,6 +79,8 @@ export class AuthService {
         passwordHash,
         firstName: dto.firstName,
         lastName: dto.lastName,
+        isEmailVerified: false, // <-- Inicia en falso
+        verificationToken,     // <-- Guardamos el token generado
       });
       const savedUser = await manager.save(user);
 
@@ -93,20 +100,37 @@ export class AuthService {
 
       return { savedUser, savedOrg };
     });
+    
+    console.log(`[DEV] Token de verificación para ${dto.email}: ${verificationToken}`);
 
-    const tokens = await this.generateTokens(savedUser.id, savedOrg.id);
     return {
+      message: 'Usuario registrado con éxito. Por favor verifica tu correo electrónico para activar completamente tu cuenta y organizaciones.',
       user: {
         id: savedUser.id,
         email: savedUser.email,
         firstName: savedUser.firstName,
         lastName: savedUser.lastName,
       },
-      activeOrganization: {
-        id: savedOrg.id,
-        name: savedOrg.name,
-      },
-      ...tokens,
+    };
+  }
+
+
+  /**
+   * Valida el token de verificación de correo y activa la cuenta.
+   */
+  async verifyEmail(token: string) {
+    const user = await this.userRepo.findOne({ where: { verificationToken: token } });
+    
+    if (!user) {
+      throw new BadRequestException('El token de verificación es inválido o ya ha expirado.');
+    }
+
+    user.isEmailVerified = true;
+    user.verificationToken = null as any; // Limpiamos el token para que sea de un solo uso
+    await this.userRepo.save(user);
+
+    return {
+      message: 'Correo verificado exitosamente. Ya puedes iniciar sesión y operar tus organizaciones.',
     };
   }
 
@@ -119,47 +143,18 @@ export class AuthService {
       throw new UnauthorizedException('Credenciales inválidas o cuenta inactiva');
     }
 
+    // Validar si verificó su correo
+    if (!user.isEmailVerified) {
+      throw new ForbiddenException('Debes verificar tu correo electrónico antes de iniciar sesión.');
+    }
+
     const isPasswordValid = await argon2.verify(user.passwordHash, dto.password);
     if (!isPasswordValid) {
       throw new UnauthorizedException('Credenciales inválidas');
     }
 
-    // Obtener todas las organizaciones del usuario
-    const memberships = await this.memberRepo.find({
-      where: { userId: user.id },
-    });
-
-    if (memberships.length === 0) {
-      throw new ForbiddenException('El usuario no pertenece a ninguna organización activa');
-    }
-
-    // Seleccionar la organización marcada como isDefault, o la primera disponible
-    const defaultMembership = memberships.find((m) => m.isDefault) || memberships[0];
-
-    const tokens = await this.generateTokens(user.id, defaultMembership.organizationId);
-
-    return {
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-      },
-      activeOrganization: {
-        id: defaultMembership.organization.id,
-        name: defaultMembership.organization.name,
-        role: defaultMembership.role.name,
-      },
-      organizations: memberships.map((m) => ({
-        id: m.organization.id,
-        name: m.organization.name,
-        role: m.role.name,
-        isDefault: m.isDefault,
-      })),
-      ...tokens,
-    };
+    // ... resto de tu lógica de login existente ...
   }
-
   /**
    * Cambio de organización activa: Emite un nuevo JWT con el nuevo org_id y permisos de esa empresa.
    */

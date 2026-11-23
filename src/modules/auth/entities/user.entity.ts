@@ -33,4 +33,10 @@ export class User {
 
   @OneToMany(() => OrganizationMember, (member) => member.user)
   memberships: OrganizationMember[];
+
+  @Column({ name: 'is_email_verified', default: false })
+  isEmailVerified: boolean;
+
+  @Column({ name: 'verification_token', nullable: true })
+  verificationToken: string;
 }
